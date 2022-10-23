@@ -1,29 +1,10 @@
 !!!    This program sloves Buoyancy Driven Cavity Flow problem using Lattice Boltzmann Method
 !!!    Lattice Boltzmann Equation with MRT-LBE model
 
-
-!~!~For steadyFlow, we define array up, vp, Tp to check  convergence;
-!~!~for unsteadyFlow, we did not define array up, vp, Tp to save memory.
-#define steadyFlow    
-! #define unsteadyFlow
-
-!~!~Uncomment below to simulate mass particles
-!~#define pointParticle
-
 !!!~~velocity B.C.~~
 #define HorizontalWallsNoslip
 #define VerticalWallsNoslip
-!!!~#define VerticalWallsPeriodicalU
-!!!~#define HorizontalWallsFreeslip
-!!!~#define VerticalWallsFreeslip
 !!!~~velocity B.C.~~
-
-!!!!~~temperature B.C. (for Rayleigh Benard Cell)~~
-! #define RayleighBenardCell
-! #define HorizontalWallsConstT
-! #define VerticalWallsAdiabatic
-!~#define VerticalWallsPeriodicalT
-!!!!~~temperature B.C.~~
 
 !!!~~temperature B.C. (for Side Heated Cell)~~
 #define SideHeatedCell
@@ -31,22 +12,14 @@
 #define VerticalWallsConstT
 !!!~~temperature B.C.~~
 
+!!!~~output~~
+! #define __OUT_PUT__
+
 module commondata
     implicit none
-    !-----------------------------------------------------------------------------------------------
-    integer(kind=4), parameter :: loadInitField=0 !! value 0: do NOT load previous data file; value 1: load data from previous one.
-    integer(kind=4), parameter :: reloadDimensionlessTime=0 ! total free-fall time in previous simulation, check Re_Vol.dat // Nu_Bulk.dat
-    integer(kind=4), parameter :: reloadStatisticallyConvergeTime=0 !free-fall time after reaching StatisticallyConvergeState in previous simulation.
-    integer(kind=4), parameter :: reloadbinFileNum=0 ! check backup-*.bin file name 
-    
-    !! value 0: do NOT simulate reversal; value 1: do simulate reversal
-    !! for reversal, the simulation stops at "t = flowReversalTimeMax" (after stationary)
-    !! for non-reversal, the simulation stops when statistics converge.
-    integer(kind=4), parameter :: flowReversal=0  
-    
+
     integer(kind=4), parameter :: total_nx=8193, total_ny=total_nx     !----Section 1----!
     integer :: nx, ny, i_start_global, j_start_global
-    integer(kind=4), parameter :: flowGeometry=1    !----Section 1----!
     real(kind=8), parameter :: lengthUnit=dble(total_ny)     !----Section 1----!
     
     real(kind=8), parameter :: Rayleigh=1e8        !----Section 2----!
@@ -56,32 +29,17 @@ module commondata
     real(kind=8), parameter :: outputFrequency=1.0d0 !~unit free fall time                            !----Section 3----!
     
     integer(kind=4), parameter :: dimensionlessTimeMax=int(3000/outputFrequency)  !----Section 3----!
-    integer(kind=4), parameter :: flowReversalTimeMax=int(10000/outputFrequency)    !----Section 3----!
-                                                    !~!~if flowReversal=1,dimensionlessTimeMax shoud > flowReversalTimeMax
-    integer(kind=4), parameter :: backupInterval=2000        !~!~unit: free-fall time            !----Section 3----!
-    integer(kind=4), parameter :: minAvgPeriod=int(1000/outputFrequency)               !----Section 3----!
-    integer(kind=4), parameter :: stationaryCheckInterval=int(100/outputFrequency)  !----Section 3----!
-    integer(kind=4), parameter :: convergeCheckInterval=int(100/outputFrequency)  !----Section 3----!
-    
-    real(kind=8), parameter :: statStationError=0.02d0  !----Section 3----!
-    real(kind=8), parameter :: statConvError=0.02d0     !----Section 3----!
+
+    !----Section 3----!
     real(kind=8), parameter :: epsU=1e-6                     !----Section 3----!
     real(kind=8), parameter :: epsT=1e-6                     !----Section 3----!
-
-    real(kind=8), parameter :: shearReynolds = 0.0d0      !----Section 4----!
     
     integer(kind=4), parameter :: outputBinFile=0, outputPltFile=1                 !----Section *----!
             
     real(kind=8), parameter :: Pi=4.0d0*datan(1.0d0)
-    real(kind=8), parameter :: tiltedAngle=dble(0.0d0/180.0d0*Pi)
     !-----------------------------------------------------------------------------------------------        
     !----Section 1----!
     integer(kind=4), parameter :: nxHalf=(total_nx-1)/2+1, nyHalf=(total_ny-1)/2+1
-    integer(kind=4), parameter :: nxFourth=(total_nx-1)/4+1, nyFourth=(total_ny-1)/4+1
-    integer(kind=4), parameter :: nxThreeFourths=3*(total_nx-1)/4+1, nyThreeFourths=3*(total_ny-1)/4+1
-    real(kind=8), parameter :: xCenter=dble(nxHalf), yCenter=dble(nyHalf)
-    
-    integer(kind=4), parameter :: squareGeo=1, cornerLessGeo=2, circularGeo=3, porousIsoGeo=4
     
     !-----------------------------------------------------------------------------------------------
     !----Section 2----!
@@ -96,27 +54,21 @@ module commondata
     real(kind=8), parameter :: gBeta=gBeta1/lengthUnit/lengthUnit
     
     real(kind=8), parameter :: timeUnit=dsqrt(lengthUnit/gBeta)  !!dble(ny*ny)/diffusivity
-    real(kind=8), parameter :: velocityUnit=dsqrt(gBeta*lengthUnit)
+
 
     real(kind=8), parameter :: Snu=1.0d0/tauf, Sq=8.0d0*(2.0d0*tauf-1.0d0)/(8.0d0*tauf-1.0d0)
     real(kind=8), parameter :: Qd=3.0d0-dsqrt(3.0d0), Qnu=4.0d0*dsqrt(3.0d0)-6.0d0
     !-----------------------------------------------------------------------------------------------
     !----Section 3----!
-    integer(kind=4) :: statisticallyStationaryState, statisticallyStationaryTime
-    integer(kind=4) :: statisticallyConvergeState
     real(kind=8) :: errorU, errorT
-    !-----------------------------------------------------------------------------------------------
-    !----Section 4----!
-    real(kind=8), parameter :: U0=shearReynolds*viscosity/dble(total_ny)
-    real(kind=8), parameter :: UwallTopLeft=U0, UwallTopRight=-U0, UwallBottomLeft=-U0, UwallBottomRight=U0
-    real(kind=8), parameter :: UwallLeftTop=U0, UwallLeftBottom=U0, UwallRightTop=U0, UwallRightBottom=U0  !----Section 4----!!----Section 4----!
+
     !-----------------------------------------------------------------------------------------------
     !----Section 5----!
     real(kind=8) :: xp(0:total_nx+1), yp(0:total_ny+1)
     real(kind=8), allocatable :: u(:,:), v(:,:), T(:,:), rho(:,:)
-#ifdef steadyFlow
+
     real(kind=8), allocatable :: up(:,:), vp(:,:), Tp(:,:)
-#endif
+
     real(kind=8), allocatable :: f(:,:,:), f_post(:,:,:)
     real(kind=8), allocatable :: g(:,:,:), g_post(:,:,:)
     real(kind=8), allocatable :: Fx(:,:), Fy(:,:)
@@ -134,14 +86,8 @@ module commondata
     !----Section 6----!
     integer(kind=4) :: itc
     integer(kind=4), parameter :: itc_max=dimensionlessTimeMax*int(outputFrequency*timeUnit)
-    
-    integer(kind=4) :: binFileNum, pltFileNum
-    integer(kind=4) :: particleFileNum
-    integer(kind=4) :: dimensionlessTime
-    real(kind=8) :: NuVolAvg(0:dimensionlessTimeMax), ReVolAvg(0:dimensionlessTimeMax)  !*here, the index should start from zero
-    real(kind=8) :: NuVolAvg_mean(0:dimensionlessTimeMax), ReVolAvg_mean(0:dimensionlessTimeMax)  !*because we will calculate Nu(t)-Nu(t-100) at time t=100.
- 
-    
+
+
     !$acc declare create(u, v, T, rho, up, vp, Tp, f, f_post, g, g_post, Fx, Fy) &
     !$acc create(nx, ny)
 end module commondata
@@ -149,7 +95,7 @@ end module commondata
 module mpi_data
     implicit none
     integer :: rc, rank, num_process
-    integer :: dims(0:1) = (0, 0), coords(0:1)
+    integer :: dims(0:1) = (/0, 0/), coords(0:1)
     logical :: periods(0:1)
     data periods/2*.false./
     integer :: comm2d, rank2d
@@ -167,7 +113,6 @@ module mpi_data
 end module mpi_data
     
 
-
 program main
     use mpi
     use mpi_data    
@@ -184,25 +129,25 @@ program main
     call allocate_all()
 
     call initial()
+
+#ifdef __OUT_PUT__
+    call output()
+#endif
                 
     call CPU_TIME(timeStart)
-
-    !$acc update device(u, v, rho, T, f, g)
 
     call MPI_Barrier(MPI_COMM_WORLD, rc)
     start_time = MPI_Wtime()
 
-    do while( ((errorU.GT.epsU).OR.(errorT.GT.epsT)).AND.(itc.LE.itc_max).AND.(statisticallyConvergeState.EQ.0) )
+    do while( ((errorU.GT.epsU).OR.(errorT.GT.epsT)).AND.(itc.LE.itc_max))
 
         itc = itc+1
         
         call flow_update()
 
-#ifdef steadyFlow
         if(MOD(itc,2000).EQ.0) call check()
-#endif
 
-        if(MOD(itc,30000).EQ.0) exit
+        if(MOD(itc,12000).EQ.0) exit
 
     enddo
 
@@ -215,6 +160,9 @@ program main
         write(*,*) "Time (MPI) = ", real(end_time - start_time), "s"
     endif
 
+#ifdef __OUT_PUT__
+    call output()
+#endif
     
    call free_all()
 
@@ -245,14 +193,10 @@ subroutine mpi_starts()
     call MPI_Get_processor_name(processor_name, name_len, rc)
 
     !!! decomposition the domain 
-    call MPI_Dims_create(num_process, 2, dims, rc)
-    ! switch dims(0) and dims(1) to cut y first
-    tmp = dims(0)
-    dims(0) = dims(1)
-    dims(1) = tmp
-
+    ! call MPI_Dims_create(num_process, 2, dims, rc)
     ! dims(0) = 1
-    ! dims(1) = 1
+    call MPI_Dims_create_2d(num_process, dims, total_nx, total_ny, periods, rc)
+    
     call MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, .true., comm2d, rc)
     if(rank == 0) then
         write(*,*) "dimens is x*y = ", dims(0), "x", dims(1)
@@ -319,6 +263,69 @@ contains
         endif
 
     end subroutine decompose_1d
+
+    subroutine MPI_Dims_create_2d(num_process, dims, total_nx, total_ny, periods, rc)
+        integer, intent(in) :: num_process, total_nx, total_ny, rc
+        logical, intent(in) :: periods(0:1)
+        integer, intent(inout) :: dims(0:1)
+        integer :: i, j, k, is(0:1), ie(0:1)
+        real :: message, diff, lx, ly, lz
+        integer :: restrict(0:1)
+
+        ! determine the dimensions of cartesian topologies to minimize the message exchange
+        ! under user provided restrictions if dims(0:2) != 0
+
+        restrict = dims
+
+        diff = dble(total_nx) * dble(total_ny) * 10.0d0
+
+        is = 1
+        ie = num_process
+        ! if user set restrictions
+        do i = 0, 1
+            if (restrict(i) .NE. 0) then
+                is(i) = restrict(i)
+                ie(i) = restrict(i)
+            endif
+        enddo
+        
+
+        do i = is(0), ie(0)
+            do j = is(1), ie(1)
+                if (i * j == num_process) then
+                    message = 0.0d0
+                    ! local nx, local ny, local nz
+                    lx = dble(total_nx) / dble(i)
+                    ly = dble(total_ny) / dble(j)
+
+                    ! maximum message need to exchange for a process
+                    if (i > 1) then
+                        ! if divide at this dimision
+                        message = message + ly
+                        if (i > 2 .OR. periods(0)) then
+                            ! if dims() > 2 or is periodic
+                            message = message + ly 
+                        endif
+                    endif
+                    if (j > 1) then
+                        message = message + lx
+                        if (j > 2 .OR. periods(1)) then
+                            message = message + lx 
+                        endif
+                    endif
+
+
+                    if (message < diff) then
+                        diff = message
+                        dims(0) = i
+                        dims(1) = j
+                    endif
+                endif
+            enddo
+        enddo
+
+    end subroutine MPI_Dims_create_2d
+
 end subroutine mpi_starts
 
 
@@ -334,11 +341,11 @@ subroutine allocate_all()
     allocate (T(nx,ny))
     allocate (rho(nx,ny))
     
-#ifdef steadyFlow
+
     allocate (up(nx,ny))
     allocate (vp(nx,ny))
     allocate (Tp(nx,ny))
-#endif
+
     
     allocate (f(nx,ny,0:8))
     allocate (f_post(0:nx+1,0:ny+1,0:8))
@@ -381,11 +388,11 @@ subroutine free_all()
     deallocate(v)
     deallocate(T)
     deallocate(rho)
-#ifdef steadyFlow
+
     deallocate(up)
     deallocate(vp)
     deallocate(Tp)
-#endif
+
     deallocate(Fx)
     deallocate(Fy)
 
@@ -401,19 +408,17 @@ subroutine free_all()
     deallocate(g_recv_neg_x)
 
 end subroutine free_all
-
-
  
+
 subroutine initial()
     use mpi_data
     use commondata
     implicit none
-    integer(kind=4) :: i, j, start, end
+    integer(kind=4) :: i, j
     integer(kind=4) :: alpha
     real(kind=8) :: un(0:8)
     real(kind=8) :: us2
-    character(len=100) :: reloadFileName
-    real(kind=8) :: dev
+
     
     itc = 0
     errorU = 100.0d0
@@ -430,38 +435,36 @@ subroutine initial()
         yp(j) = dble(j)-0.5d0
     enddo
     
-    rho = rho0
-
-    if(loadInitField.EQ.0) then 
     
-        u = 0.0d0
-        v = 0.0d0
-        T = 0.0d0
+    !$acc parallel loop collapse(2)
+    do j = 1, ny
+        do i = 1, nx
+            rho(i, j) = rho0
+            u(i, j) = 0.0d0
+            v(i, j) = 0.0d0
+            T(i, j) = 0.0d0
 
+            up(i, j) = 0.0d0
+            vp(i, j) = 0.0d0
+            Tp(i, j) = 0.0d0
+        enddo
+    enddo
+
+    !$acc kernels
 #ifdef VerticalWallsConstT
+    !$acc loop collapse(2)
     do j=1,ny
-        !~T(1,j) = Thot
-        !~T(nx,j) = Tcold
         do i=1,nx
-            ! T(i,j) = dble(i-1)/dble(nx-1)*(Tcold-Thot)+Thot
             T(i, j) = dble(i_start_global + i - 1) / dble(total_nx - 1) * (Tcold - Thot) + Thot
         enddo
     enddo
 #endif
-#ifdef HorizontalWallsConstT
-    do i=1,nx
-        !~T(i,1) = Thot
-        !~T(i,ny) = Tcold
-        do j=1,ny
-            ! T(i,j) = dble(j-1)/dble(ny-1)*(Tcold-Thot)+Thot
-            T(i, j) = dble(j_start_global + j - 1) / dble(total_ny - 1) * (Tcold - Thot) + Thot
-        enddo
-    enddo
-#endif
+    !$acc end kernels
 
-    f = 0.0d0
-    g = 0.0d0
+    ! f = 0.0d0
+    ! g = 0.0d0
     
+    !$acc parallel loop collapse(2) private(alpha, us2, un)
     do j=1,ny
         do i=1,nx
             us2 = u(i,j)*u(i,j)+v(i,j)*v(i,j)
@@ -475,36 +478,9 @@ subroutine initial()
             enddo
         enddo
     enddo
-
-    else
-        if (rank == 0) then
-            write(00,*) "Error: initial field is not properly set"
-        endif
-        stop
-    endif
-    
-
-#ifdef steadyFlow
-    up = 0.0d0
-    vp = 0.0d0
-    Tp = 0.0d0
-#endif
-        
-    f_post = 0.0d0
-    g_post = 0.0d0
-    
-    binFileNum = 0
-    pltFileNum = 0
-    particleFileNum = 0
-    dimensionlessTime = 0
-
-    NuVolAvg = 0.0d0
-    ReVolAvg = 0.0d0
-    NuVolAvg_mean = 0.0d0
-    ReVolAvg_mean = 0.0d0
-    statisticallyStationaryState = 1
-    statisticallyStationaryTime = 0
-    statisticallyConvergeState = 0
+     
+    ! f_post = 0.0d0
+    ! g_post = 0.0d0
     
     return
 end subroutine initial
@@ -606,7 +582,7 @@ subroutine streaming()
     integer(kind=4) :: ip, jp
     integer(kind=4) :: alpha
     
-    !$acc parallel loop independent collapse(2) async(2)
+    !$acc parallel loop independent collapse(2)
     do j=1,ny
         do i=1,nx
             !$acc loop seq
@@ -628,10 +604,8 @@ subroutine bounceback()
     use commondata
     implicit none
     integer(kind=4) :: i, j
-    integer(kind=4) :: alpha
-    real(kind=8) :: x0, y0, q
 
-    !$acc kernels async(2)
+    !$acc kernels
 #ifdef VerticalWallsNoslip
     !Left side (i=1)
     if (coords(0) == 0) then
@@ -685,7 +659,7 @@ subroutine macro()
     implicit none
     integer(kind=4) :: i, j
 
-    !$acc parallel loop independent collapse(2) async(2)
+    !$acc parallel loop independent collapse(2)
     do j=1,ny
         do i=1,nx
             rho(i,j) = f(i,j,0)+f(i,j,1)+f(i,j,2)+f(i,j,3)+f(i,j,4)+f(i,j,5)+f(i,j,6)+f(i,j,7)+f(i,j,8)
@@ -756,8 +730,7 @@ subroutine streamingT()
     integer(kind=4) :: ip, jp
     integer(kind=4) :: alpha
     
-    !$acc parallel loop independent collapse(2) &
-    !$acc private(ip, jp) async(1)
+    !$acc parallel loop independent collapse(2) async
     do j = 1, ny
         do i = 1, nx
             !$acc loop seq
@@ -779,10 +752,9 @@ subroutine bouncebackT()
     use commondata
     implicit none
     integer(kind=4) :: i, j
-    integer(kind=4) :: alpha
-    real(kind=8) :: x0,y0,q,Cd1,Cd2,Cd3,Cd4
 
-    !$acc kernels async(1)
+
+    !$acc kernels async
 #ifdef HorizontalWallsAdiabatic
     !Bottom side
     if (coords(1) == 0) then
@@ -801,41 +773,6 @@ subroutine bouncebackT()
     endif
 #endif
 
-    ! #ifdef HorizontalWallsConstT
-    !    !Bottom side
-    !     if (coords(1) == 0) then
-    !         !$acc loop independent
-    !         do i = 1, nx 
-    !             g(i, 1, 2) = -g_post(i, 1, 4)+(4.0d0+paraA)/10.0d0*Thot
-    !         enddo
-    !     endif
-
-    !     ! Top side
-    !     if (coords(1) == dims(1) - 1) then
-    !         !$acc loop independent
-    !         do i = 1, nx 
-    !             g(i, ny, 4) = -g_post(i, ny, 2)+(4.0d0+paraA)/10.0d0*Tcold
-    !         enddo
-    !     endif
-    ! #endif
-
-    ! #ifdef VerticalWallsAdiabatic
-    !     !Left side
-    !     if (coords(0) == 0) then
-    !         !$acc loop independent
-    !         do j = 1, ny 
-    !             g(1,j,1) = g_post(1,j,3)
-    !         enddo
-    !     endif
-
-    !     !Right side
-    !     if (coords(0) == dims(0) - 1) then
-    !         !$acc loop independent
-    !         do j = 1, ny 
-    !             g(nx,j,3) = g_post(nx,j,1)
-    !         enddo
-    !     endif
-    ! #endif
 
 #ifdef VerticalWallsConstT
     !Left side
@@ -863,9 +800,8 @@ subroutine macroT()
     use commondata
     implicit none
     integer(kind=4) :: i, j
-    real(kind=8) :: a
     
-    !$acc parallel loop independent collapse(2) async(1)
+    !$acc parallel loop independent collapse(2) async
     do j = 1, ny
         do i = 1, nx
             T(i,j) = g(i,j,0)+g(i,j,1)+g(i,j,2)+g(i,j,3)+g(i,j,4)
@@ -883,11 +819,9 @@ subroutine compute_boundary_f_yz()
     implicit none
     integer :: i, j, idx, tmp
 
-    !$acc kernels async(3)
+    !$acc kernels 
     call collision(1, nx, 1, 1)
-    !$acc end kernels
 
-    !$acc kernels async(4)
     call collision(1, nx, ny, ny)
     !$acc end kernels
 
@@ -901,58 +835,43 @@ subroutine flow_update()
     implicit none
 
     call compute_boundary_f_yz()
-    !$acc wait(3,4)
 
-    ! async(3)
     call pack_f_y()
-        !$acc kernels async(2)
-        call collision(1, nx, 2, ny-1)
-        !$acc end kernels
-        !$acc wait(3)
-        call mpi_f_y()
-    ! async(3)
-    call unpack_f_y()
-    !$acc wait
-
-    ! async(3)
-    call pack_f_x()
-        !$acc kernels async(1)
+        !$acc kernels async
         call collisionT(1, nx, 1, ny)
         !$acc end kernels
-        !$acc wait(3)
-        call mpi_f_x()
-    ! async(3)
-    call unpack_f_x()
-    !$acc wait
+        call mpi_f_y()
+        !$acc wait
+    call unpack_f_y()
 
-    ! async(3)
     call pack_g_x()
-    ! async(4)
     call pack_g_y()
-        ! kernels async(2)
-        call streaming()
-        call bounceback()
-        call macro()
-        ! end kernels
-        !$acc wait(3,4)
+        !$acc kernels async
+        call collision(1, nx, 2, ny-1)
+        !$acc end kernels
         call mpi_g_x()
         call mpi_g_y()
-    ! async(1)
+        !$acc wait
     call unpack_g_x()
-    ! async(1)
     call unpack_g_y()
 
-    ! async(1)
-    call streamingT()
-    call bouncebackT()
-    call macroT()
-    
-    !$acc wait
+    call pack_f_x()
+        ! kernels async
+        call streamingT()
+        call bouncebackT()
+        call macroT()
+        ! end kernels
+        call mpi_f_x()
+        !$acc wait
+    call unpack_f_x()
+
+    call streaming()
+    call bounceback()
+    call macro()
+
 end subroutine
 
 
-
-#ifdef steadyFlow
 subroutine check()
     use mpi
     use mpi_data
@@ -1001,8 +920,6 @@ subroutine check()
 
     return
 end subroutine check
-#endif
-
 
 subroutine mpi_f_y()
     use mpi
@@ -1033,7 +950,7 @@ subroutine pack_f_y
     integer :: i, j, tmp, idx
 
     if(dims(1) > 1) then
-        !$acc parallel loop independent collapse(2) private(tmp) async(3)
+        !$acc parallel loop independent collapse(2) private(tmp)
         do idx = 0, 2
             do i = 0, nx+1
                 tmp = (nx+2)*idx + i + 1
@@ -1045,6 +962,7 @@ subroutine pack_f_y
 
 endsubroutine
 
+
 subroutine unpack_f_y()
     use mpi_data
     use commondata
@@ -1052,7 +970,7 @@ subroutine unpack_f_y()
     integer :: i, j, tmp, idx
 
     if(dims(1) > 1) then
-        !$acc parallel loop independent collapse(2) private(tmp) async(3)
+        !$acc parallel loop independent collapse(2) private(tmp)
         do idx = 0, 2
             do i = 0, nx+1
                 tmp = (nx+2)*idx + i + 1
@@ -1096,7 +1014,7 @@ subroutine pack_f_x()
     integer :: i, j, idx, tmp
 
     if (dims(0) > 1) then
-        !$acc parallel loop independent collapse(2) private(tmp) async(3)
+        !$acc parallel loop independent collapse(2) private(tmp)
         do idx = 0, 2
             do j = 0, ny+1
                 tmp = (ny+2)*idx + j + 1
@@ -1117,7 +1035,7 @@ subroutine unpack_f_x()
     integer :: i, j, idx, tmp
 
     if (dims(0) > 1) then
-        !$acc parallel loop independent collapse(2) private(tmp) async(3)
+        !$acc parallel loop independent collapse(2) private(tmp)
         do idx = 0, 2
             do j = 0, ny+1
                 tmp = (ny+2)*idx + j + 1
@@ -1192,7 +1110,7 @@ subroutine pack_g_x()
     integer :: i, j
 
     if (dims(0) > 1) then
-        !$acc parallel loop independent async(3)
+        !$acc parallel loop independent
         do j = 0, ny+1
             g_send_pos_x(j+1) = g_post(nx, j, 1)
             g_send_neg_x(j+1) = g_post(1, j, 3)
@@ -1209,7 +1127,7 @@ subroutine unpack_g_x()
     integer :: i, j
 
     if (dims(0) > 1) then
-        !$acc parallel loop independent async(1)
+        !$acc parallel loop independent
         do j = 0, ny+1
             g_post(0, j, 1) = g_recv_pos_x(j+1)
             g_post(nx+1, j, 3) = g_recv_neg_x(j+1)
@@ -1218,3 +1136,264 @@ subroutine unpack_g_x()
   
 
 endsubroutine 
+
+
+#ifdef __OUT_PUT__
+    subroutine output()
+        use mpi
+        use commondata
+        use mpi_data
+        integer :: i, j
+        integer :: p_rank, num(0:3) ,dx = 0, dy = 0, new_coords(0:1)
+        real(8), allocatable :: total_u(:, :), total_v(:, :), total_rho(:, :), total_T(:, :)
+        real(8), allocatable :: tmp_u(:, :), tmp_v(:, :), tmp_rho(:, :), tmp_T(:, :)
+
+        !$acc update if_present self(u,v,rho,T)
+
+        if (rank2d > 0) then
+            ! rank != 0 send data
+            num(0) = nx
+            num(1) = ny
+            num(2) = i_start_global
+            num(3) = j_start_global
+            ! send to rank 0
+            call MPI_Send(num, 4, MPI_INTEGER, 0, 0, comm2d, rc)    ! block size and origion
+            call MPI_Send(u, nx*ny, MPI_REAL8, 0, 1, comm2d, rc)
+            call MPI_Send(v, nx*ny, MPI_REAL8, 0, 2, comm2d, rc)
+            call MPI_Send(rho, nx*ny, MPI_REAL8, 0, 3, comm2d, rc)
+            call MPI_Send(T, nx*ny, MPI_REAL8, 0, 4, comm2d, rc)
+        else
+            ! rank 0 collect data
+            allocate(total_u(total_nx, total_ny))
+            allocate(total_v(total_nx, total_ny))
+            allocate(total_rho(total_nx, total_ny))
+            allocate(total_T(total_nx, total_ny))
+
+            dx = i_start_global
+            dy = j_start_global
+
+            ! collect data from rank 0
+            do j = 1, ny
+                do i = 1, nx
+                    total_u(dx + i, dy + j) = u(i, j)
+                    total_v(dx + i, dy + j) = v(i, j)
+                    total_rho(dx + i, dy + j) = rho(i, j)
+                    total_T(dx + i, dy + j) = T(i, j)
+                enddo
+            enddo
+
+            ! collect data from all other processors
+            do p_rank = 1, dims(0) * dims(1) - 1
+                ! receive the block size and origion
+                call MPI_Recv(num, 4, MPI_INTEGER, p_rank, 0, comm2d, MPI_STATUS_IGNORE, rc)
+                ! creat buffer
+                allocate(tmp_u(num(0), num(1)))
+                allocate(tmp_v(num(0), num(1)))
+                allocate(tmp_rho(num(0), num(1)))
+                allocate(tmp_T(num(0), num(1)))
+                
+                ! receive data
+                call MPI_Recv(tmp_u, num(0) * num(1), MPI_DOUBLE_PRECISION, p_rank, 1, comm2d, MPI_STATUS_IGNORE, rc)
+                call MPI_Recv(tmp_v, num(0) * num(1), MPI_DOUBLE_PRECISION, p_rank, 2, comm2d, MPI_STATUS_IGNORE, rc)
+                call MPI_Recv(tmp_rho, num(0) * num(1), MPI_DOUBLE_PRECISION, p_rank, 3, comm2d, MPI_STATUS_IGNORE, rc)
+                call MPI_Recv(tmp_T, num(0) * num(1), MPI_DOUBLE_PRECISION, p_rank, 4, comm2d, MPI_STATUS_IGNORE, rc)
+
+                ! determine the origin
+                dx = num(2)
+                dy = num(3)
+
+                ! assign data
+                do j = 1, num(1)
+                    do i = 1, num(0)
+                        total_u(dx + i, dy + j) = tmp_u(i, j)
+                        total_v(dx + i, dy + j) = tmp_v(i, j)
+                        total_rho(dx + i, dy + j) = tmp_rho(i, j)
+                        total_T(dx + i, dy + j) = tmp_T(i, j)
+                    enddo
+                enddo
+
+                deallocate(tmp_u)
+                deallocate(tmp_v)
+                deallocate(tmp_rho)
+                deallocate(tmp_T)
+            enddo
+            
+            call output_Tecplot(xp, yp, total_u, total_v, total_rho, total_T, total_nx, total_ny, itc)
+            call output_binary(total_u, total_v, total_rho, total_T, total_nx, total_ny, itc)
+            ! call output_ASCII(total_u, total_v, total_rho, total_T, total_nx, total_ny, itc)
+
+            deallocate(total_u)
+            deallocate(total_v)
+            deallocate(total_rho)
+            deallocate(total_T)
+
+        endif
+
+    end subroutine output
+
+    subroutine output_binary(u, v, rho, T, nx, ny, itc)
+        implicit none
+        integer, intent(in) :: nx, ny, itc
+        real(8), intent(in) :: u(nx, ny), v(nx, ny), rho(nx, ny), T(nx, ny)
+        integer(kind=4) :: i, j
+        character(len=100) :: filename
+
+
+        write(filename,*) itc
+        filename = adjustl(filename)
+
+        open(unit=03,file="buoyancyCavity-"//trim(filename)//'.bin',form="unformatted",access="sequential")
+        write(03) ((u(i,j),i=1,nx),j=1,ny)
+        write(03) ((v(i,j),i=1,nx),j=1,ny)
+        write(03) ((T(i,j),i=1,nx),j=1,ny)
+        close(03)
+
+        return
+    end subroutine output_binary
+
+    subroutine output_Tecplot(xp, yp, u, v, rho, T, nx, ny, itc)
+        implicit none
+        integer, intent(in) :: nx, ny, itc
+        real(8), intent(in) :: xp(0:nx+1), yp(0:ny+1)
+        real(8), intent(in) :: u(nx, ny), v(nx, ny), rho(nx, ny), T(nx, ny)
+        integer(kind=4) :: i, j, k
+        character(len=9) :: B2
+        REAL(kind=4) :: zoneMarker, eohMarker
+        character(len=40) :: title
+        character(len=40) :: V1,V2,V3,V4,V5,V6,V7,V8
+        integer(kind=4), parameter :: kmax=1
+        character(len=40) :: zoneName
+        character(len=100) :: filename
+
+
+        write(filename,'(i12.12)') itc
+        filename = adjustl(filename)
+        
+        open(unit=41,file="buoyancyCavity-"//trim(filename)//'.plt', access='stream', form='unformatted')
+
+        !---------------------------------------------
+        zoneMarker= 299.0
+        eohMarker = 357.0
+
+        !I. HEAD SECTION--------------------------------------
+        !c--Magic number, Version number
+        write(41) '#!TDV101'
+
+        !c--Integer value of 1
+        write(41) 1
+
+        Title='MyFirst'
+        call dumpstring(title)
+
+        !c-- Number of variables in this data file
+
+        write(41) 6
+
+        !c-- Variable names.
+        V1='X'
+        call dumpstring(V1)
+        V2='Y'
+        call dumpstring(V2)
+        V3='U'
+        call dumpstring(V3)
+        V4='V'
+        call dumpstring(V4)
+        V5='T'
+        call dumpstring(V5)
+        V6='rho'
+        call dumpstring(V6)
+
+
+
+        !c-----Zones-----------------------------
+
+        !c--------Zone marker. Value = 299.0
+        write(41) zoneMarker
+
+        !--------Zone name.
+        zoneName='ZONE 001'
+        call dumpstring(zoneName)
+
+        !---------Zone Color
+        write(41) -1
+
+        !---------ZoneType
+        write(41) 0
+
+        !---------DataPacking 0=Block, 1=Point
+        write(41) 1
+
+        !---------Specify Var Location. 0 = Do not specify, all data
+        !---------is located at the nodes. 1 = Specify
+        write(41) 0
+
+        !---------Number of user defined face neighbor connections
+        ! (value >= 0)
+        write(41) 0
+
+        !---------IMax,JMax,KMax
+        write(41) nx
+        write(41) ny
+        write(41) kmax
+
+        !-----------1=Auxiliary name/value pair to follow
+        !-----------0=No more Auxiliar name/value pairs.
+        write(41) 0
+        write(41) eohMarker
+
+        !----zone ------------------------------------------------------------
+        write(41) zoneMarker
+
+        !--------variable data format, 1=Float, 2=Double, 3=LongInt,4=ShortInt, 5=Byte, 6=Bit
+        write(41) 1
+        write(41) 1
+        write(41) 1
+        write(41) 1
+        write(41) 1
+        write(41) 1
+
+
+        !--------Has variable sharing 0 = no, 1 = yes.
+        write(41) 0
+
+        !----------Zone number to share connectivity list with (-1 = no
+        ! sharing).
+        write(41) -1
+
+        !---------------------------------------------------------------------
+        do k=1,kmax
+            do j=1,ny
+                do i=1,nx
+                    write(41) real(xp(i))
+                    write(41) real(yp(j))
+                    write(41) real(u(i,j))
+                    write(41) real(v(i,j))
+                    write(41) real(T(i,j))
+                    write(41) real(rho(i,j))
+                end do
+            end do
+        enddo
+        close(41)
+        !---------------------------------------------------------------------
+
+        return
+    end subroutine output_Tecplot
+
+    subroutine dumpstring(instring)
+        implicit none
+        character(len=40) instring
+        integer(kind=4) :: stringLength
+        integer(kind=4) :: ii
+        integer(kind=4) :: I
+
+        stringLength=LEN_TRIM(instring)
+        do ii=1,stringLength
+            I=ICHAR(instring(ii:ii))
+            write(41) I
+        end do
+        write(41) 0
+
+        return
+    end subroutine dumpstring
+
+#endif

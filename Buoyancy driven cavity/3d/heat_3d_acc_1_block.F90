@@ -136,7 +136,7 @@ program main
         endif
 
         ! timer test
-        if (mod(itc, 20000) == 0) then
+        if (mod(itc, 6000) == 0) then
             exit
         endif
     enddo
@@ -182,6 +182,7 @@ subroutine mpi_starts()
     integer :: local_comm, local_rank
     integer :: name_len, tmp
     character(len=MPI_MAX_PROCESSOR_NAME) :: processor_name
+    integer :: mesh_size(0:2)
 
     call MPI_Init(rc)
 
@@ -190,11 +191,10 @@ subroutine mpi_starts()
     call MPI_Get_processor_name(processor_name, name_len, rc)
 
     !!! ---- Decomposition the domain
-    call MPI_Dims_create(num_process, 3, dims, rc)
-    ! switch dims(0) and dims(2) to cut z first
-    tmp = dims(0)
-    dims(0) = dims(2)
-    dims(2) = tmp
+    ! dims(0) = 1
+    ! dims(1) = 1
+    call MPI_Dims_create_3d(num_process, dims, total_nx, total_ny, total_nz, periods, rc)
+
     call MPI_Cart_create(MPI_COMM_WORLD, 3, dims, periods, .true., comm3d, rc)
     if(rank == 0) then
         write(*,*) "Using ", num_process, "processers."
@@ -268,6 +268,77 @@ contains
         endif
 
     end subroutine decompose_1d
+
+    subroutine MPI_Dims_create_3d(num_process, dims, total_nx, total_ny, total_nz, periods, rc)
+        integer, intent(in) :: num_process, total_nx, total_ny, total_nz, rc
+        logical, intent(in) :: periods(0:2)
+        integer, intent(inout) :: dims(0:2)
+        integer :: i, j, k, is(0:2), ie(0:2)
+        real :: message, diff, lx, ly, lz
+        integer :: restrict(0:2)
+
+        ! determine the dimensions of cartesian topologies to minimize the message exchange
+        ! under user provided restrictions if dims(0:2) != 0
+
+        restrict = dims
+
+        diff = dble(total_nx) * dble(total_ny) * dble(total_nz)
+
+        is = 1
+        ie = num_process
+        ! if user set restrictions
+        do i = 0, 2
+            if (restrict(i) .NE. 0) then
+                is(i) = restrict(i)
+                ie(i) = restrict(i)
+            endif
+        enddo
+        
+
+        do i = is(0), ie(0)
+            do j = is(1), ie(1)
+                do k = is(2), ie(2)
+                    if (i * j * k == num_process) then
+                        message = 0.0d0
+                        ! local nx, local ny, local nz
+                        lx = dble(total_nx) / dble(i)
+                        ly = dble(total_ny) / dble(j)
+                        lz = dble(total_nz) / dble(k)
+
+                        ! maximum message need to exchange for a process
+                        if (i > 1) then
+                            ! if divide at this dimision
+                            message = message + ly * lz
+                            if (i > 2 .OR. periods(0)) then
+                                ! if dims() > 2 or is periodic
+                                message = message + ly * lz
+                            endif
+                        endif
+                        if (j > 1) then
+                            message = message + lx * lz
+                            if (j > 2 .OR. periods(1)) then
+                                message = message + lx * lz
+                            endif
+                        endif
+                        if (k > 1) then
+                            message = message + lx * ly
+                            if (k > 2 .OR. periods(2)) then
+                                message = message + lx * ly
+                            endif
+                        endif
+
+                        if (message < diff) then
+                            diff = message
+                            dims(0) = i
+                            dims(1) = j
+                            dims(2) = k
+                        endif
+                    endif
+                enddo
+            enddo
+        enddo
+
+    end subroutine MPI_Dims_create_3d
 
 end subroutine mpi_starts
 
@@ -1445,7 +1516,7 @@ subroutine g_message_passing_sendrecv()
 
 end subroutine g_message_passing_sendrecv
 
-#ifdef __OUTPUT__
+#ifdef __OUT_PUT__
     subroutine output()
         use mpi
         use commondata

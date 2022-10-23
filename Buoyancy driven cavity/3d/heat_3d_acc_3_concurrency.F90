@@ -86,6 +86,9 @@ module mpi_data
     integer :: surface_length_x, surface_length_y, surface_length_z
     ! buffer layer 
     real(8), allocatable :: send_pos(:), recv_pos(:), send_neg(:), recv_neg(:)
+    real(8), allocatable :: g_send_pos_x(:), g_recv_pos_x(:), g_send_neg_x(:), g_recv_neg_x(:)
+    real(8), allocatable :: g_send_pos_y(:), g_recv_pos_y(:), g_send_neg_y(:), g_recv_neg_y(:)
+    ! real(8), allocatable :: g_send_pos_z(:), g_recv_pos_z(:), g_send_neg_z(:), g_recv_neg_z(:)
     ! f tags at different directions
     integer, parameter :: f_tag_x_pos(0:4) = (/ 1, 7, 9, 11, 13 /)
     integer, parameter :: f_tag_x_neg(0:4) = (/ 2, 8, 10 ,12, 14 /)
@@ -95,6 +98,8 @@ module mpi_data
     integer, parameter :: f_tag_z_neg(0:4) = (/ 6, 13, 14, 17, 18 /)
 
     !$acc declare create(send_pos(:), recv_pos(:), send_neg(:), recv_neg(:)) &
+    !$acc create(g_send_pos_x(:), g_recv_pos_x(:), g_send_neg_x(:), g_recv_neg_x(:)) &
+    !$acc create(g_send_pos_y(:), g_recv_pos_y(:), g_send_neg_y(:), g_recv_neg_y(:)) &
     !$acc create(surface_length_x, surface_length_y, surface_length_z, dims, coords)
 end module mpi_data
 
@@ -120,10 +125,6 @@ program main
     call output()
 #endif
 
-    if(rank == 0) then
-        write(*,*) "start"
-    endif
-
     call CPU_TIME(start)
 
     call MPI_Barrier(MPI_COMM_WORLD, rc)
@@ -140,7 +141,7 @@ program main
         endif
 
         ! timer test
-        if (mod(itc, 20000) == 0) then
+        if (mod(itc, 6000) == 0) then
             exit
         endif
     enddo
@@ -184,7 +185,7 @@ subroutine mpi_starts()
     implicit none
     integer :: num_gpus, gpu_id
     integer :: local_comm, local_rank
-    integer :: name_len
+    integer :: name_len, tmp
     character(len=MPI_MAX_PROCESSOR_NAME) :: processor_name
 
     call MPI_Init(rc)
@@ -194,10 +195,10 @@ subroutine mpi_starts()
     call MPI_Get_processor_name(processor_name, name_len, rc)
 
     !!! ---- Decomposition the domain
-    ! dims(0) = 1
-    ! dims(1) = 1
-    ! dims(2) = 3
-    call MPI_Dims_create(num_process, 3, dims, rc)
+    ! call MPI_Dims_create(num_process, 3, dims, rc)
+    call MPI_Dims_create_3d(num_process, dims, total_nx, total_ny, total_nz, periods, rc)
+
+
     call MPI_Cart_create(MPI_COMM_WORLD, 3, dims, periods, .true., comm3d, rc)
     if(rank == 0) then
         write(*,*) "Using ", num_process, "processers."
@@ -272,6 +273,77 @@ contains
 
     end subroutine decompose_1d
 
+    subroutine MPI_Dims_create_3d(num_process, dims, total_nx, total_ny, total_nz, periods, rc)
+        integer, intent(in) :: num_process, total_nx, total_ny, total_nz, rc
+        logical, intent(in) :: periods(0:2)
+        integer, intent(inout) :: dims(0:2)
+        integer :: i, j, k, is(0:2), ie(0:2)
+        real :: message, diff, lx, ly, lz
+        integer :: restrict(0:2)
+
+        ! determine the dimensions of cartesian topologies to minimize the message exchange
+        ! under user provided restrictions if dims(0:2) != 0
+
+        restrict = dims
+
+        diff = dble(total_nx) * dble(total_ny) * dble(total_nz)
+
+        is = 1
+        ie = num_process
+        ! if user set restrictions
+        do i = 0, 2
+            if (restrict(i) .NE. 0) then
+                is(i) = restrict(i)
+                ie(i) = restrict(i)
+            endif
+        enddo
+        
+
+        do i = is(0), ie(0)
+            do j = is(1), ie(1)
+                do k = is(2), ie(2)
+                    if (i * j * k == num_process) then
+                        message = 0.0d0
+                        ! local nx, local ny, local nz
+                        lx = dble(total_nx) / dble(i)
+                        ly = dble(total_ny) / dble(j)
+                        lz = dble(total_nz) / dble(k)
+
+                        ! maximum message need to exchange for a process
+                        if (i > 1) then
+                            ! if divide at this dimision
+                            message = message + ly * lz
+                            if (i > 2 .OR. periods(0)) then
+                                ! if dims() > 2 or is periodic
+                                message = message + ly * lz
+                            endif
+                        endif
+                        if (j > 1) then
+                            message = message + lx * lz
+                            if (j > 2 .OR. periods(1)) then
+                                message = message + lx * lz
+                            endif
+                        endif
+                        if (k > 1) then
+                            message = message + lx * ly
+                            if (k > 2 .OR. periods(2)) then
+                                message = message + lx * ly
+                            endif
+                        endif
+
+                        if (message < diff) then
+                            diff = message
+                            dims(0) = i
+                            dims(1) = j
+                            dims(2) = k
+                        endif
+                    endif
+                enddo
+            enddo
+        enddo
+
+    end subroutine MPI_Dims_create_3d
+
 end subroutine mpi_starts
 
 
@@ -312,6 +384,21 @@ subroutine allocate_all()
     allocate(send_neg(1 : 5*max_length))
     allocate(recv_neg(1 : 5*max_length))
 
+    allocate(g_send_pos_x(max_length))
+    allocate(g_recv_pos_x(max_length))
+    allocate(g_send_neg_x(max_length))
+    allocate(g_recv_neg_x(max_length))
+
+    allocate(g_send_pos_y(max_length))
+    allocate(g_recv_pos_y(max_length))
+    allocate(g_send_neg_y(max_length))
+    allocate(g_recv_neg_y(max_length))
+
+    ! allocate(g_send_pos_z(max_length))
+    ! allocate(g_recv_pos_z(max_length))
+    ! allocate(g_send_neg_z(max_length))
+    ! allocate(g_recv_neg_z(max_length))
+
 end subroutine
 
 subroutine free_all()
@@ -339,6 +426,21 @@ subroutine free_all()
     deallocate(recv_pos)
     deallocate(send_neg)
     deallocate(recv_neg)
+
+    deallocate(g_send_pos_x)
+    deallocate(g_recv_pos_x)
+    deallocate(g_send_neg_x)
+    deallocate(g_recv_neg_x)
+
+    deallocate(g_send_pos_y)
+    deallocate(g_recv_pos_y)
+    deallocate(g_send_neg_y)
+    deallocate(g_recv_neg_y)
+
+    ! deallocate(g_send_pos_z)
+    ! deallocate(g_recv_pos_z)
+    ! deallocate(g_send_neg_z)
+    ! deallocate(g_recv_neg_z)
 
 end subroutine
 
@@ -728,7 +830,7 @@ subroutine streaming()
     integer :: ip, jp, kp
     integer :: alpha
     
-    !$acc parallel loop independent collapse(3)
+    !$acc parallel loop independent collapse(3) async(2)
     do k=1,nz
         do j=1,ny
             do i=1,nx
@@ -754,11 +856,11 @@ subroutine bounceback()
     implicit none
     integer :: i, j, k
 
-    !$acc kernels
+    !$acc kernels async(2)
 #ifdef noslipWalls
     !Back plane (i = 1)
     if (coords(0) == 0) then
-        !$acc loop independent collapse(2)
+        !$acc loop independent collapse(2) 
         do k=1,nz
             do j=1,ny
                 f(1,j,k,1) = f_post(1,j,k,2)
@@ -852,7 +954,7 @@ subroutine macro()
     implicit none
     integer :: i, j, k
 
-    !$acc parallel loop independent collapse(3)
+    !$acc parallel loop independent collapse(3) async(2)
     do k=1,nz
         do j=1,ny
             do i=1,nx
@@ -940,7 +1042,7 @@ subroutine streamingT()
     integer :: ip, jp, kp
     integer :: alpha
     
-    !$acc parallel loop independent collapse(3)
+    !$acc parallel loop independent collapse(3) async(1)
     do k=1,nz
         do j=1,ny
             do i=1,nx
@@ -966,7 +1068,7 @@ subroutine bouncebackT()
     implicit none
     integer :: i, j, k
 
-    !$acc kernels
+    !$acc kernels async(1)
 #ifdef TopBottomPlatesAdiabatic
     ! Bottom side (k=1)
     if (coords(2) == 0) then
@@ -1082,7 +1184,7 @@ subroutine macroT()
     implicit none
     integer :: i, j, k
 
-    !$acc parallel loop independent collapse(3)
+    !$acc parallel loop independent collapse(3) async(1)
     do k=1,nz
         do j=1,ny
             do i=1,nx
@@ -1094,35 +1196,344 @@ subroutine macroT()
     return
 end subroutine macroT
 
+
+subroutine compute_boundary_f_yz()
+    use commondata
+    use mpi_data
+    use mpi
+    implicit none
+    integer :: i, j, idx, tmp
+
+    !$acc kernels async(3)
+    call collision(1, nx, 1, ny, 1, 1)
+    !$acc end kernels
+
+    !$acc kernels async(4)
+    call collision(1, nx, 1, ny, nz, nz)
+    !$acc end kernels
+
+    !$acc kernels async(5)
+    call collision(1, nx, 1, 1, 1, nz)
+    !$acc end kernels
+
+    !$acc kernels async(6)
+    call collision(1, nx, ny, ny, 1, nz)
+    !$acc end kernels
+
+end subroutine compute_boundary_f_yz
+
+
 subroutine flow_update()
     use commondata
     use mpi_data
     use mpi
     implicit none
-    
-    !$acc kernels
-    call collision(1, nx, 1, ny, 1, nz)
-    !$acc end kernels
 
-    !$acc kernels
-    call collisionT(1, nx, 1, ny, 1, nz)
-    !$acc end kernels
+    ! async(3, 4, 5, 6)
+    call compute_boundary_f_yz()
+    !$acc wait
 
+    ! async(3)
+    call pack_f_z()
+        !$acc kernels async(1)
+        call collisionT(1, nx, 1, ny, 1, nz)
+        !$acc end kernels
+        !$acc wait(3)
+        call mpi_f_z()
+    ! async(3)
+    call unpack_f_z()
+    !$acc wait
+
+    ! async(3,4,5)
+    call pack_f_y_g()
+        !$acc kernels async(2)
+        call collision(1, nx, 2, ny-1, 2, nz-1)
+        !$acc end kernels
+        !$acc wait(3,4,5)
+        call mpi_f_y_g()
+    ! async(3,4,5)
+    call unpack_f_y_g()
+    !$acc wait
+
+    ! async(3)
+    call pack_f_x()
+        ! kernels async(1)
+        call streamingT()
+        call bouncebackT()
+        call macroT()
+        ! end kernels
+        !$acc wait(3)
+        call mpi_f_x()
+    ! async(2)
+    call unpack_f_x()
+
+    ! async(2)
     call streaming()
-
+    ! async(2)
     call bounceback()
-
-    call streamingT()
-
-    call bouncebackT()
-
+    ! async(2)
     call macro()
 
-    call macroT()
+    !$acc wait
+
 
 end subroutine
 
 
+subroutine mpi_f_y_g()
+    use mpi
+    use mpi_data
+    use commondata
+    implicit none
+
+    call mpi_f_y()
+
+    call mpi_g_y()
+    call mpi_g_x()
+    call mpi_g_z()
+
+contains
+    subroutine mpi_f_y()
+        use mpi
+        use mpi_data
+        use commondata
+        implicit none
+
+        ! ------------ exchange message along y ----------------
+        ! message passing to (j++)
+        !$acc host_data use_device(send_pos, recv_pos, send_neg, recv_neg)
+        call MPI_Sendrecv(send_pos, 5 * surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(3), 44, &
+            recv_pos, 5 * surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(4), 44, &
+            comm3d, MPI_STATUS_IGNORE, rc)
+
+        ! message passing to (j--)
+        call MPI_Sendrecv(send_neg, 5*surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(4), 55, &
+            recv_neg, 5*surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(3), 55, &
+            comm3d, MPI_STATUS_IGNORE, rc)
+        !$acc end host_data
+
+    end subroutine
+
+    subroutine mpi_g_x()
+        use mpi
+        use mpi_data
+        use commondata
+        implicit none
+    
+        ! ------------ exchange message along x ----------------
+        ! message passing to (i++)
+        !$acc host_data use_device(g_send_pos_x, g_recv_pos_x, g_send_neg_x, g_recv_neg_x)
+        call MPI_Sendrecv(g_send_pos_x, surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(1), 1, &
+            g_recv_pos_x, surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(2), 1, &
+            comm3d, MPI_STATUS_IGNORE, rc)
+
+        ! message passing to (i--)
+        call MPI_Sendrecv(g_send_neg_x, surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(2), 2, &
+            g_recv_neg_x, surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(1), 2, &
+            comm3d, MPI_STATUS_IGNORE, rc)
+        !$acc end host_data
+    
+    end subroutine
+
+    subroutine mpi_g_y()
+        use mpi
+        use mpi_data
+        use commondata
+        implicit none
+    
+        ! ------------ exchange message along y ----------------
+        ! message passing to (j++)
+        !$acc host_data use_device(g_send_pos_y, g_recv_pos_y, g_send_neg_y, g_recv_neg_y)
+        call MPI_Sendrecv(g_send_pos_y, surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(3), 3, &
+            g_recv_pos_y, surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(4), 3, &
+            comm3d, MPI_STATUS_IGNORE, rc)
+
+        ! message passing to (j--)
+        call MPI_Sendrecv(g_send_neg_y, surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(4), 4, &
+            g_recv_neg_y, surface_length_y, MPI_DOUBLE_PRECISION, nbr_surface(3), 4, &
+            comm3d, MPI_STATUS_IGNORE, rc)
+        !$acc end host_data
+    
+    end subroutine
+
+    subroutine mpi_g_z()
+        use mpi
+        use mpi_data
+        use commondata
+        implicit none
+
+        ! ! ------------ exchange message along z ----------------
+        ! ! message passing to (k++)
+        ! !$acc host_data use_device(g_post)  
+        ! call MPI_Sendrecv(g_send_pos_z, surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(5), 5, &
+        !     g_recv_pos_z, surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(6), 5, &
+        !     comm3d, MPI_STATUS_IGNORE, rc)
+    
+        ! ! message passing to (k--)
+        ! call MPI_Sendrecv(g_send_neg_z, surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(6), 6, &
+        !     g_recv_neg_z, surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(5), 6, &
+        !     comm3d, MPI_STATUS_IGNORE, rc)
+        ! !$acc end host_data
+
+        
+        !$acc host_data use_device(g_post)  
+        ! message passing to (k++)
+        call MPI_Sendrecv(g_post(0, 0, nz, 5), surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(5), 5, &
+            g_post(0, 0, 0, 5), surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(6), 5, &
+            comm3d, MPI_STATUS_IGNORE, rc)     
+
+        ! message passing to (k--)
+        call MPI_Sendrecv(g_post(0, 0, 1, 6), surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(6), 6, &
+            g_post(0, 0, nz+1, 6), surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(5), 6, &
+            comm3d, MPI_STATUS_IGNORE, rc)     
+        !$acc end host_data
+
+
+
+    end subroutine
+
+end subroutine
+
+subroutine pack_f_y_g()
+    use mpi_data
+    use commondata
+
+    ! async(3)
+    call pack_f_y()
+    ! async(4,5)
+    call pack_g()
+
+contains
+    subroutine pack_f_y()
+        use mpi_data
+        use commondata
+        implicit none
+        integer :: i, j, k, idx, tmp
+
+        ! pack the message to send
+        !$acc parallel loop independent collapse(3) private(tmp) async(3)
+        do idx = 0, 4
+            do k = 0, nz+1
+                do i = 0, nx+1
+                    tmp = i + (nx+2) * k + surface_length_y * idx + 1
+                    send_pos(tmp) = f_post(i, ny, k, f_tag_y_pos(idx))
+                    send_neg(tmp) = f_post(i, 1, k, f_tag_y_neg(idx))
+                enddo
+            enddo
+        enddo
+
+    end subroutine
+
+    subroutine pack_g()
+        use mpi_data
+        use commondata
+        implicit none
+        integer :: i, j, k, tmp
+            
+        ! pack the message to send along x
+        !$acc parallel loop independent collapse(2) private(tmp) async(4)
+        do k = 0, nz+1
+            do j = 0, ny+1
+                tmp = j + (ny+2) * k + 1
+                g_send_pos_x(tmp) = g_post(nx, j, k, 1)
+                g_send_neg_x(tmp) = g_post(1, j, k, 2)
+            enddo
+        enddo
+
+        ! pack the message to send along y
+        !$acc parallel loop independent collapse(2) private(tmp) async(5)
+        do k = 0, nz+1
+            do i = 0, nx+1
+                tmp = i + (nx+2) * k + 1
+                g_send_pos_y(tmp) = g_post(i, ny, k, 3)
+                g_send_neg_y(tmp) = g_post(i, 1, k, 4)
+            enddo
+        enddo
+
+        ! ! pack the message to send along z
+        ! !$acc parallel loop independent collapse(2) private(tmp)
+        ! do j = 0, ny+1
+        !     do i = 0, nx+1
+        !         tmp = i + (nx+2) * j + 1
+        !         g_send_pos_z(tmp) = g_post(i, j, nz, 5)
+        !         g_send_neg_z(tmp) = g_post(i, j, 1, 6)
+        !     enddo
+        ! enddo
+    
+    end subroutine
+
+end subroutine
+
+subroutine unpack_f_y_g()
+    use mpi_data
+    use commondata
+
+    ! async(3)
+    call unpack_f_y()
+    ! async(4,5)
+    call unpack_g()
+
+contains
+
+    subroutine unpack_f_y()
+        use mpi_data
+        use commondata
+        implicit none
+        integer :: i, j, k, idx, tmp
+
+        ! depack the recvied message
+        !$acc parallel loop independent collapse(3) private(tmp) async(3)
+        do idx = 0, 4
+            do k = 0, nz+1
+                do i = 0, nx+1
+                    tmp = i + (nx+2) * k + surface_length_y * idx + 1
+                    f_post(i, 0, k, f_tag_y_pos(idx)) = recv_pos(tmp)
+                    f_post(i, ny+1, k, f_tag_y_neg(idx)) = recv_neg(tmp)
+                enddo
+            enddo
+        enddo
+
+    end subroutine
+
+    subroutine unpack_g()
+        use mpi_data
+        use commondata
+        implicit none
+        integer :: i, j, k, tmp
+    
+        ! unpack the recvied message along x
+        !$acc parallel loop independent collapse(2) private(tmp) async(4)
+        do k = 0, nz+1
+            do j = 0, ny+1
+                tmp = j + (ny+2) * k + 1
+                g_post(0, j, k, 1) = g_recv_pos_x(tmp) 
+                g_post(nx+1, j, k, 2) = g_recv_neg_x(tmp) 
+            enddo
+        enddo
+
+        ! unpack the recvied message along y
+        !$acc parallel loop independent collapse(2) private(tmp) async(5)
+        do k = 0, nz+1
+            do i = 0, nx+1
+                tmp = i + (nx+2) * k + 1
+                g_post(i, ny+1, k, 4) = g_recv_neg_y(tmp)
+                g_post(i, 0, k, 3) = g_recv_pos_y(tmp)
+            enddo
+        enddo
+
+        ! ! unpack the recvied message along z
+        ! !$acc parallel loop independent collapse(2) private(tmp)
+        ! do j = 0, ny+1
+        !     do i = 0, nx+1
+        !         tmp = i + (nx+2) * j + 1
+        !         g_post(i, j, 0, 5) = g_recv_pos_z(tmp) 
+        !         g_post(i, j, nz+1, 6) = g_recv_neg_z(tmp) 
+        !     enddo
+        ! enddo
+    
+    end subroutine
+
+end subroutine
 
 subroutine check()
     use mpi
@@ -1162,16 +1573,12 @@ subroutine check()
 
     !$acc end kernels
 
-    total_error1 = error1
-    total_error2 = error2
-    total_error5 = error5
-    total_error6 = error6
-    ! call MPI_Barrier(comm3d, rc)
+    call MPI_Barrier(comm3d, rc)
 
-    ! call MPI_ALLreduce(error1, total_error1, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
-    ! call MPI_ALLreduce(error2, total_error2, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
-    ! call MPI_ALLreduce(error5, total_error5, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
-    ! call MPI_ALLreduce(error6, total_error6, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
+    call MPI_ALLreduce(error1, total_error1, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
+    call MPI_ALLreduce(error2, total_error2, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
+    call MPI_ALLreduce(error5, total_error5, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
+    call MPI_ALLreduce(error6, total_error6, 1, MPI_REAL8, MPI_SUM, comm3d, rc)
     
     errorU = dsqrt(total_error1)/dsqrt(total_error2)
     errorT = total_error5 / total_error6
@@ -1183,9 +1590,131 @@ subroutine check()
     return
 end subroutine check
 
+subroutine pack_f_z()
+    use mpi_data
+    use commondata
+    implicit none
+    integer :: i, j, k, idx, tmp
+
+    ! pack the message to send
+    !$acc parallel loop independent collapse(3) private(tmp) async(3)
+    do idx = 0, 4
+        do j = 0, ny+1
+            do i = 0, nx+1
+                tmp = i + (nx+2) * j + surface_length_z * idx + 1
+                send_pos(tmp) = f_post(i, j, nz, f_tag_z_pos(idx))
+                send_neg(tmp) = f_post(i, j, 1, f_tag_z_neg(idx))
+            enddo
+        enddo
+    enddo
+end subroutine
+
+subroutine mpi_f_z()
+    use mpi
+    use mpi_data
+    use commondata
+    implicit none
+    integer :: idx, req(4)
+
+    ! ------------ exchange message along z ----------------
+    ! message passing to (k++)
+    !$acc host_data use_device(send_pos, recv_pos, send_neg, recv_neg)
+    call MPI_Sendrecv(send_pos, 5*surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(5), 55, &
+        recv_pos, 5*surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(6), 55, &
+        comm3d, MPI_STATUS_IGNORE, rc)
+
+    ! message passing to (k--)
+    call MPI_Sendrecv(send_neg, 5*surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(6), 66, &
+        recv_neg, 5*surface_length_z, MPI_DOUBLE_PRECISION, nbr_surface(5), 66, &
+        comm3d, MPI_STATUS_IGNORE, rc)
+    !$acc end host_data
+
+    call MPI_Waitall(4, req, MPI_STATUSES_IGNORE, rc)
+
+end subroutine
+
+subroutine unpack_f_z()
+    use mpi_data
+    use commondata
+    implicit none
+    integer :: i, j, k, idx, tmp
+    ! unpack the recvied message
+    !$acc parallel loop independent collapse(3) private(tmp) async(3)
+    do idx = 0, 4
+        do j = 0, ny+1
+            do i = 0, nx+1
+                tmp = i + (nx+2) * j + surface_length_z * idx + 1
+                f_post(i, j, 0, f_tag_z_pos(idx)) = recv_pos(tmp) 
+                f_post(i, j, nz+1, f_tag_z_neg(idx)) = recv_neg(tmp) 
+            enddo
+        enddo
+    enddo
+endsubroutine
+
+subroutine pack_f_x()
+    use mpi_data
+    use commondata
+    implicit none
+    integer :: i, j, k, idx, tmp
+
+    ! pack the message to send
+    !$acc parallel loop independent collapse(3) private(tmp) async(3)
+    do idx = 0, 4
+        do k = 0, nz+1
+            do j = 0, ny+1
+                tmp = j + (ny+2) * k + surface_length_x * idx + 1
+                send_pos(tmp) = f_post(nx, j, k, f_tag_x_pos(idx))
+                send_neg(tmp) = f_post(1, j, k, f_tag_x_neg(idx))
+            enddo
+        enddo
+    enddo
+
+end subroutine
+
+subroutine mpi_f_x()
+    use mpi
+    use mpi_data
+    use commondata
+    implicit none
+    integer :: req(4)
+
+    ! ------------ exchange message along x ----------------
+    ! message passing to (i++)
+    !$acc host_data use_device(send_pos, recv_pos, send_neg, recv_neg)
+    call MPI_Sendrecv(send_pos, 5*surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(1), 22, &
+        recv_pos, 5*surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(2), 22, &
+        comm3d, MPI_STATUS_IGNORE, rc)
+
+    ! message passing to (i--)
+    call MPI_Sendrecv(send_neg, 5*surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(2), 33, &
+        recv_neg, 5*surface_length_x, MPI_DOUBLE_PRECISION, nbr_surface(1), 33, &
+        comm3d, MPI_STATUS_IGNORE, rc)
+    !$acc end host_data
+
+    call MPI_Waitall(4, req, MPI_STATUSES_IGNORE, rc)
+
+end subroutine
+
+subroutine unpack_f_x()
+    use mpi_data
+    use commondata
+    implicit none
+    integer :: i, j, k, idx, tmp
+    !$acc parallel loop independent collapse(3) private(tmp) async(2)
+    do idx = 0, 4
+        do k = 0, nz+1
+            do j = 0, ny+1
+                tmp = j + (ny+2) * k + surface_length_x * idx + 1
+                f_post(0, j, k, f_tag_x_pos(idx)) = recv_pos(tmp) 
+                f_post(nx+1, j, k, f_tag_x_neg(idx)) = recv_neg(tmp) 
+            enddo
+        enddo
+    enddo
+
+end subroutine
 
 
-#ifdef __OUTPUT__
+#ifdef __OUT_PUT__
     subroutine output()
         use mpi
         use commondata
