@@ -28,7 +28,7 @@ module commondata
     
     real(kind=8), parameter :: outputFrequency=1.0d0 !~unit free fall time                            !----Section 3----!
     
-    integer(kind=4), parameter :: dimensionlessTimeMax=int(3000/outputFrequency)  !----Section 3----!
+    integer(kind=8), parameter :: dimensionlessTimeMax=int(3000/outputFrequency)  !----Section 3----!
 
     !----Section 3----!
     real(kind=8), parameter :: epsU=1e-6                     !----Section 3----!
@@ -84,8 +84,8 @@ module commondata
                                             ((paraA+4.0d0)/20.0d0, index = 1,4) /)
     !-----------------------------------------------------------------------------------------------
     !----Section 6----!
-    integer(kind=4) :: itc
-    integer(kind=4), parameter :: itc_max=dimensionlessTimeMax*int(outputFrequency*timeUnit)
+    integer(kind=8) :: itc
+    integer(kind=8), parameter :: itc_max=dimensionlessTimeMax*int(outputFrequency*timeUnit)
 
 
     !$acc declare create(u, v, T, rho, up, vp, Tp, f, f_post, g, g_post, Fx, Fy) &
@@ -118,6 +118,7 @@ program main
     use mpi_data    
     use commondata
     implicit none
+    integer :: warmup = 0
     real(kind=8) :: timeStart, timeEnd
     real(8) :: start_time, end_time
     integer :: i, j, idx, tmp
@@ -137,6 +138,13 @@ program main
     call CPU_TIME(timeStart)
 
     call MPI_Barrier(MPI_COMM_WORLD, rc)
+
+    ! warm up
+    do while (itc .LE. warmup) 
+        itc = itc+1
+        call flow_update()
+    enddo
+
     start_time = MPI_Wtime()
 
     do while( ((errorU.GT.epsU).OR.(errorT.GT.epsT)).AND.(itc.LE.itc_max))
@@ -147,7 +155,7 @@ program main
 
         if(MOD(itc,2000).EQ.0) call check()
 
-        if(MOD(itc,12000).EQ.0) exit
+        if(MOD(itc,2000).EQ.0) exit
 
     enddo
 
@@ -411,6 +419,7 @@ end subroutine free_all
  
 
 subroutine initial()
+    use mpi
     use mpi_data
     use commondata
     implicit none
@@ -419,6 +428,36 @@ subroutine initial()
     real(kind=8) :: un(0:8)
     real(kind=8) :: us2
 
+
+    if (rank == 0) then
+        write(*,*) 'Mesh:',nx,ny
+        write(*,*) 'Rayleigh=',real(Rayleigh), ', Prandtl=',real(Prandtl), ', Mach=',real(Mach)
+        write(*,*) "   "
+        write(*,*) 'tauf=',real(tauf)
+        write(*,*) "paraA=",real(paraA)
+        write(*,*) "viscosity=",real(viscosity), ", diffusivity=",real(diffusivity)
+        write(*,*) "itc_max=",itc_max
+        write(*,*) "Ouput will begin at", int(timeUnit)
+        write(*,*) "Output interval is", int(timeUnit)
+        write(*,*) "Time unit: Sqrt(L0/(gBeta*DeltaT))=",dsqrt(dble(total_ny)/gBeta)
+        write(*,*) "Velocity unit: Sqrt(gBeta*L0*DeltaT)=",dsqrt(gBeta*dble(total_ny))
+        write(*,*) "    "
+        if ((paraA.GE.1.0d0).OR.(paraA.LE.-4.0d0)) then
+            write(*, *) '--------------------------------'
+            write(*, *) 'Error:paraA=', paraA
+            write(*, *) '... Current Mach number is:', real(Mach)
+            write(*, *) '...Please try to reduce Mach number'
+            write(*, *) '--------------------------------'
+            call MPI_Abort(MPI_COMM_WORLD, 1, rc)
+            stop
+        else if (itc_max < 0) then
+            write(*, *) '--------------------------------'
+            write(*, *) 'Error:itc_max=', itc_max, " integer overflow"
+            write(*, *) '--------------------------------'
+            call MPI_Abort(MPI_COMM_WORLD, 1, rc)
+            stop
+        endif
+    endif
     
     itc = 0
     errorU = 100.0d0
@@ -1138,6 +1177,7 @@ end subroutine message_passing_g
         write(03) ((u(i,j),i=1,nx),j=1,ny)
         write(03) ((v(i,j),i=1,nx),j=1,ny)
         write(03) ((T(i,j),i=1,nx),j=1,ny)
+        write(03) ((rho(i,j),i=1,nx),j=1,ny)
         close(03)
 
         return

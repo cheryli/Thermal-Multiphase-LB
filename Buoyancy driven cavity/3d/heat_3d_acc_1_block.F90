@@ -31,7 +31,7 @@ module commondata
     real(kind=8), parameter :: viscosity=(tauf-0.5d0)/3.0d0
     real(kind=8), parameter :: diffusivity=viscosity/Prandtl
     
-    real(kind=8), parameter :: Ekman=0.001d0
+    real(kind=8), parameter :: Ekman=0.000d0
     real(kind=8), parameter :: omegaRatating=viscosity/2.0d0/Ekman/dble(total_nz*total_nz)
     
     real(kind=8), parameter :: paraA=42.0d0*dsqrt(3.0d0)*diffusivity-6.0d0
@@ -39,10 +39,10 @@ module commondata
     real(kind=8), parameter :: gBeta=gBeta1/dble(total_nz*total_nz)
     
     real(kind=8), parameter :: timeUnit=dsqrt(dble(total_nz)/gBeta)  !!dble(ny*ny)/diffusivity
-    integer, parameter :: dimensionlessTimeMax=1000
-    integer, parameter :: flowReversalTime=20000
-    integer :: itc
-    integer, parameter :: itc_max=INT(dimensionlessTimeMax*timeUnit)
+    integer(kind=8), parameter :: dimensionlessTimeMax=1000
+    integer(kind=8), parameter :: flowReversalTime=20000
+    integer(kind=8) :: itc
+    integer(kind=8), parameter :: itc_max=INT(dimensionlessTimeMax*timeUnit)
     
     real(kind=8), parameter :: epsU=1e-8
     real(kind=8), parameter :: epsT=1e-8
@@ -105,6 +105,7 @@ program main
     use mpi_data
     use commondata
     implicit none
+    integer :: warmup = 0
     real(kind=8) :: start, finish
     real(8) :: start_time, end_time
 
@@ -123,8 +124,15 @@ program main
     call CPU_TIME(start)
 
     call MPI_Barrier(MPI_COMM_WORLD, rc)
-    start_time = MPI_Wtime()
+    
+    ! warm up
+    do while (itc .LE. warmup) 
+        itc = itc+1
+        call flow_update()
+    enddo
 
+    start_time = MPI_Wtime()
+    
     do while( ((errorU.GT.epsU).OR.(errorT.GT.epsT)).AND.(itc.LE.itc_max) )
 
         itc = itc+1
@@ -136,7 +144,7 @@ program main
         endif
 
         ! timer test
-        if (mod(itc, 6000) == 0) then
+        if (mod(itc, 2000) == 0) then
             exit
         endif
     enddo
@@ -412,6 +420,7 @@ end subroutine
 
 
 subroutine initial()
+    use mpi
     use mpi_data
     use commondata
     implicit none
@@ -440,6 +449,21 @@ subroutine initial()
         write(*,*) "Time unit: Sqrt(L0/(gBeta*DeltaT))=",dsqrt(dble(total_ny)/gBeta)
         write(*,*) "Velocity unit: Sqrt(gBeta*L0*DeltaT)=",dsqrt(gBeta*dble(total_ny))
         write(*,*) "    "
+        if ((paraA.GE.1.0d0).OR.(paraA.LE.-4.0d0)) then
+            write(*, *) '--------------------------------'
+            write(*, *) 'Error:paraA=', paraA
+            write(*, *) '... Current Mach number is:', real(Mach)
+            write(*, *) '...Please try to reduce Mach number'
+            write(*, *) '--------------------------------'
+            call MPI_Abort(MPI_COMM_WORLD, 1, rc)
+            stop
+        else if (itc_max < 0) then
+            write(*, *) '--------------------------------'
+            write(*, *) 'Error:itc_max=', itc_max, " integer overflow"
+            write(*, *) '--------------------------------'
+            call MPI_Abort(MPI_COMM_WORLD, 1, rc)
+            stop
+        endif
     endif
 
     xp(0) = 0.0d0
@@ -1655,6 +1679,7 @@ end subroutine g_message_passing_sendrecv
         write(01) (((v(i,j,k),i=1,nx),j=1,ny),k=1,nz)
         write(01) (((w(i,j,k),i=1,nx),j=1,ny),k=1,nz)
         write(01) (((T(i,j,k),i=1,nx),j=1,ny),k=1,nz)
+        write(01) (((rho(i,j,k),i=1,nx),j=1,ny),k=1,nz)
         close(01)
 
         return
